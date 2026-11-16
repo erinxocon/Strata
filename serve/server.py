@@ -3560,6 +3560,19 @@ def gpu_list(cfg: dict) -> list[int]:
     return _gpu_numbers(cfg.get("gpu"))
 
 
+def dsv41_arg_gpus(args) -> list[int]:
+    """The cards a DeepSeek engine's own --gpus argument names ("--gpus 0,1" or "--gpus=0,1"); [] when none or unreadable."""
+    items = [str(a) for a in args]
+    for i, a in enumerate(items):
+        val = items[i + 1] if a == "--gpus" and i + 1 < len(items) else a.split("=", 1)[1] if a.startswith("--gpus=") else None
+        if val is not None:
+            try:
+                return _gpu_numbers(val)
+            except ValueError:
+                return []
+    return []
+
+
 def _gpu_numbers(g) -> list[int]:
     if g is None or g == "":
         return []
@@ -10349,6 +10362,14 @@ def _main(argv=None, *, lifecycle_event=None, interrupt_exit_code: int = 0) -> i
     svc.reasoning_loop_recovery = recovery
     svc.gpu_index = (gpu_list(cfg) or [0])[0]           # the Monitor reads the card the engine runs on (issue #51)
     svc.gpu_indices = gpu_list(cfg)                     # ... or every card of a layer split (issue #112)
+    if not svc.gpu_indices and (cfg.get("arch") or "") == "deepseek41":
+        # DeepSeek's engine takes its cards in its own args (--gpus 0,1, tensor parallel or a layer split of its own);
+        # a "gpu" list in the config would add the Qwen engine's --layer-split, which this engine does not take.
+        # So the Monitor reads every card --gpus names, not only the first.
+        ds_gpus = dsv41_arg_gpus(cfg.get("args") or [])
+        if ds_gpus:
+            svc.gpu_indices = ds_gpus
+            svc.gpu_index = ds_gpus[0]
     if a.engine == "strata" and groups:                 # replicas: every card of every group
         svc.gpu_indices = [c for g in groups for c in g]
         svc.gpu_index = svc.gpu_indices[0]
